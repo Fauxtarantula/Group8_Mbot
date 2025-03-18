@@ -1,6 +1,6 @@
-#include "MeOrion.h"
+#include "MeMCore.h"
 
-MeUltrasonicSensor ultraSensor(PORT_7); /* Ultrasonic module can ONLY be connected to port 7 in code, port 4 in real life */
+MeUltrasonicSensor ultraSensor(PORT_4); /* Ultrasonic module can ONLY be connected to port 7 in code, port 4 in real life */
 
 void setup()
 {
