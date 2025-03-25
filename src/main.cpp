@@ -1,6 +1,25 @@
 #include "MeMCore.h"
 #include "SoftwareSerial.h"
 
+/*
+REMOTE CONTROL BUTTONS:
+
+SWITCHING MODES:
+B: manual mode
+C: auto mode
+
+IN AUTO:
+A: restarts the program when robot is stopped (stop by IR, return or hunt for IR)
+D: hunt for IR
+E: return to base
+
+IN MANUAL:
+UP/DOWN: move forward/back
+LEFT/RIGHT: turn left/right
+SETTINGS: stop
+1/2/3/4: change speed (must change directions to see the effect)
+*/
+
 // pins
 const int loadSensor = A2;
 const int IRSensor = A3;
@@ -12,23 +31,27 @@ const int loadThresh = 650;
 const int IRThresh = 300;
 const int ultraThresh = 10;
 
-int remoteSpeed1 = 100;
-int remoteSpeed2 = -100;
-
 // sensors
 int load, line, IR, ultra = 0;
 
-int turnOffset = 0;
-int stop = 0; // stop moving when see IR array
+// extras
+// bools
 int manual = 0; // mode
+int stop = 0; // stop moving when see IR array
 int ret = 0; // return to original
 int hunt = 0; // hunt for IR
-int decode = 0;
 int remoteStop = 0; // stop by remote
-int delayDur = 1000;
-int firstManual, firstAuto = 1;
+int decode = 0; // checks if IR remote is sending anything
+int firstManual, firstAuto = 1; // checks if it is the first loop after switching modes
+//others
+int turnOffset = 0; // measures the number of turns done (+1 for right, -1 for left)
+int returnSpeed1 = 100; // speed when returning to original position
+int returnSpeed2 = 100;
+int remoteSpeed1 = 100; // speed in manual mode
+int remoteSpeed2 = -100;
+int delayDur = 1000; // delays in between resetting movements
 
-int debug  = 0;
+int debug  = 0; // 1 to print, 0 to not
 
 MeIR ir;
 MeBuzzer buzzer;
@@ -37,7 +60,7 @@ MeDCMotor motor2(M2);
 MeLineFollower lineFinder(PORT_1);
 MeUltrasonicSensor ultraSensor(PORT_4);
 
-void turn(bool dir) {//90 degree turn left ==1 , right == 0
+void turn(bool dir) { // 90 degree turn left == 1, right == 0
   int turnDur = 310;
   int turnSpeed = 255;
 
@@ -70,10 +93,9 @@ void turn(bool dir) {//90 degree turn left ==1 , right == 0
   }
 }
 
-void checkMode(int decode) {
-  if (decode) { // switch modes
+void checkMode(int decode) { // updates mode
+  if (decode) {
     uint32_t value = ir.value;
-    Serial.println(value);
 
     switch (value >> 16 & 0xff) {
       case IR_BUTTON_B: // switch to manual
@@ -88,7 +110,7 @@ void checkMode(int decode) {
   }
 }
 
-void checkStop(int decode) {
+void checkStop(int decode) { // updates stop if IR array is detected
   if (decode) {
     uint32_t value = ir.value;
 
@@ -101,24 +123,7 @@ void checkStop(int decode) {
   }
 }
 
-void checkRestart(int decode) { // combined for the stop, return and hunt
-  if (ir.decode()) {
-    uint32_t value = ir.value;
-
-    switch (value >> 16 & 0xff) {
-      case IR_BUTTON_A: // restart program
-        if (debug) Serial.println("RESTART");
-        stop = 0;
-        remoteStop = 0;
-        ret = 0;
-        hunt = 0;
-        break;
-    }
-  }
-}
-
-void checkReturn(int decode) {
-  // Serial.println("ee");
+void checkReturn(int decode) { // updates return to original position
   if (decode) {
     uint32_t value2 = ir.value;
 
@@ -131,7 +136,7 @@ void checkReturn(int decode) {
   }
 }
 
-void checkHunt(int decode) {
+void checkHunt(int decode) { // updates hunt for IR array
   if (decode) {
     uint32_t value2 = ir.value;
 
@@ -144,39 +149,58 @@ void checkHunt(int decode) {
   }
 }
 
-void turnReset() {
-  turnOffset -= 2; // so we turn to face the back instead
-  turnOffset %= 4; // wraparound
-  if (turnOffset == 3) turnOffset = -1;
+void checkRestart(int decode) { // updates restart the cleaning program after either stopped by IR, returned to original pos or hunted for IR
+  if (ir.decode()) {
+    uint32_t value = ir.value;
+
+    switch (value >> 16 & 0xff) {
+      case IR_BUTTON_A: // restart program
+        if (debug) Serial.println("RESTART");
+        stop = 0; // combined for the stop, return and hunt
+        remoteStop = 0;
+        ret = 0;
+        hunt = 0;
+        break;
+    }
+  }
+}
+
+void turnReset() { // makes the bot turn to face the original angle
+  // we assume the robot starts in the bottom right corner
+  turnOffset -= 2; // make it turn to face the back
+  turnOffset %= 4; // wraparound to avoid unnecessary turns
+  if (turnOffset == 3) turnOffset = -1; // take the path with fewer number of turns
   else if (turnOffset == -3) turnOffset = 1;
 
   while (turnOffset != 0) {
-    if (turnOffset > 0) { // facing right
-      turn(1);
-    }
-    else { // facing left
-      turn(0);
-    }
+    if (turnOffset > 0) turn(1); // if facing right turn left
+    else turn(0); // if facing left turn right
   }
   motor1.stop();
   motor2.stop();
   delay(500);
 }
 
-// void moveReset() {
-//   if (line == 3) { // move forward until one or both sensors see the line
-//     motor1.run(speed1);
-//     motor2.run(speed2);
-//   }
-//   else if (line != 0) { // only one sensor seeing line
-//     motor1.run(-50);
-//     motor1.run(-50);
-//   }
-  
-//   motor1.stop();
-//   motor2.stop();
-//   delay(1000);
-// }
+void moveReset() { // resets the robot translationally in forward axis using the black line
+  line = lineFinder.readSensors();
+  while (line == 3) { // move forward until see black line
+    line = lineFinder.readSensors();
+    motor1.run(returnSpeed1);
+    motor2.run(returnSpeed2);
+  }
+  motor1.stop();
+  motor2.stop();
+  delay(delayDur);
+
+  while (line != 0) {  // turn to be straight, most of the time this does nothing because the sensors are too close
+    line = lineFinder.readSensors();
+    motor1.run(-returnSpeed1);
+    motor2.run(returnSpeed2);
+  }
+  motor1.stop();
+  motor2.stop();
+  delay(delayDur);
+}
 
 void setup() {
   Serial.begin(9600);
@@ -186,17 +210,17 @@ void setup() {
 }
 
 void loop() {
-  load = analogRead(loadSensor);
+  load = analogRead(loadSensor); // load sensor, higher means more weight
   line = lineFinder.readSensors(); // 3 is both white, 2 is right black, 1 is left black, 0 is both black
-  IR = analogRead(IRSensor);
-  ultra = ultraSensor.distanceCm();
+  IR = analogRead(IRSensor); // IR sensor, lower means IR detected
+  ultra = ultraSensor.distanceCm(); // distance in cm
 
+  decode = ir.decode(); // check if anything is received by the built-in IR receiver
   checkMode(decode);
-  decode = ir.decode();
 
-  if (!manual) {
+  if (!manual) { // automatic mode
     firstManual = 1;
-    if (firstAuto) {
+    if (firstAuto) { // after switching modes beep
       turnOffset = 0;
       motor1.stop();
       motor2.stop();
@@ -217,10 +241,9 @@ void loop() {
     }
 
     checkStop(decode);
-    // Serial.println(stop);
-    if ((IR < IRThresh) | remoteStop) { // if transmitter sees IR array stop forever 
+    if ((IR < IRThresh) | remoteStop) { // if IR led sees IR array stop 
       stop = 1;
-      while (stop == 1) {
+      while (stop == 1) { // wait for restart
         motor1.stop();
         motor2.stop();
         checkRestart(decode);
@@ -233,46 +256,53 @@ void loop() {
     motor2.run(speed2);
 
     checkReturn(decode);
-    if (ret) {
+    if (ret) { // return to original position
       motor1.stop();
       motor2.stop();
       delay(delayDur);
 
-      turnReset();
+      turnReset(); // turn to face original angle
+      moveReset(); // reset in the y-axis
+      turn(1); // turn to x-axis
+      delay(delayDur); 
+      moveReset(); // reset in the x-axis
+      turn(1); // turn to face the front
+      delay(delayDur);
 
+      /*// y-axis alignment
       while (line == 3) { // move forward until see black line
         line = lineFinder.readSensors();
-        motor1.run(100);
-        motor2.run(-100);
+        motor1.run(returnSpeed1);
+        motor2.run(returnSpeed2);
       }
       motor1.stop();
       motor2.stop();
       delay(delayDur);
       while (line != 0) {  // turn to be straight
         line = lineFinder.readSensors();
-        motor1.run(-100);
-        motor2.run(-100);
+        motor1.run(-returnSpeed1);
+        motor2.run(returnSpeed2);
       }
       motor1.stop();
       motor2.stop();
       delay(delayDur);
 
+      // x-axis alignment
       turn(1); // turn right to align in the other axis
       delay(delayDur);
-      // buzzer.tone(1109, 2000);
       line = lineFinder.readSensors();
       while (line == 3) { // move forward until see black line
         line = lineFinder.readSensors();
-        motor1.run(100);
-        motor2.run(-100);
+        motor1.run(returnSpeed1);
+        motor2.run(returnSpeed2);
       }
       motor1.stop();
       motor2.stop();
       delay(delayDur);
       while (line != 0) {  // turn to be straight
         line = lineFinder.readSensors();
-        motor1.run(-100);
-        motor2.run(-100);
+        motor1.run(-returnSpeed1);
+        motor2.run(returnSpeed2);
       }
       motor1.stop();
       motor2.stop();
@@ -281,13 +311,13 @@ void loop() {
       turn(1); // turn to face the front
       motor1.stop();
       motor2.stop();
-      delay(delayDur);
+      delay(delayDur);*/
 
       while (ret) checkRestart(decode);
     }
 
     checkHunt(decode);
-    if (hunt) {
+    if (hunt) { // hunt for IR array
       while (IR > IRThresh) {
         motor1.run(-100);
         motor2.run(-100);
@@ -312,7 +342,7 @@ void loop() {
   else {
     if (debug) Serial.print("MANUAL ");
     firstAuto = 1;
-    if (firstManual) {
+    if (firstManual) { // after switching modes beep
       motor1.stop();
       motor2.stop();
       buzzer.tone(1500, 1000);
