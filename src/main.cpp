@@ -46,12 +46,12 @@ int firstManual, firstAuto = 1; // checks if it is the first loop after switchin
 //others
 int turnOffset = 0; // measures the number of turns done (+1 for right, -1 for left)
 int returnSpeed1 = 100; // speed when returning to original position
-int returnSpeed2 = 100;
+int returnSpeed2 = -100;
 int remoteSpeed1 = 100; // speed in manual mode
 int remoteSpeed2 = -100;
 int delayDur = 1000; // delays in between resetting movements
 
-int debug  = 0; // 1 to print, 0 to not
+int debug  = 1; // 1 to print, 0 to not
 
 MeIR ir;
 MeBuzzer buzzer;
@@ -61,8 +61,8 @@ MeLineFollower lineFinder(PORT_1);
 MeUltrasonicSensor ultraSensor(PORT_4);
 
 void turn(bool dir) { // 90 degree turn left == 1, right == 0
-  int turnDur = 310;
-  int turnSpeed = 255;
+  int turnDur = 347;
+  int turnSpeed = 230;
 
   // motor1.stop(); // reverse
   // motor2.stop();
@@ -110,12 +110,30 @@ void checkMode(int decode) { // updates mode
   }
 }
 
+void checkModeLoop() { // updates mode
+  if (ir.decode()) {
+    uint32_t value = ir.value;
+
+    switch (value >> 16 & 0xff) {
+      case IR_BUTTON_B: // switch to manual
+        if (debug) Serial.println("SWITCH TO MANUAL");
+        manual = 1;
+        stop = 0; // combined for the stop, return and hunt
+        remoteStop = 0;
+        ret = 0;
+        hunt = 0;
+        // return 1;
+        break;
+    }
+  }
+}
+
 void checkStop(int decode) { // updates stop if IR array is detected
   if (decode) {
     uint32_t value = ir.value;
 
     switch (value >> 16 & 0xff) {
-      case IR_BUTTON_SETTING: // restart program
+      case IR_BUTTON_SETTING: // stop moving
         if (debug) Serial.println("REMOTE STOP");
         remoteStop = 1;
         break;
@@ -149,7 +167,7 @@ void checkHunt(int decode) { // updates hunt for IR array
   }
 }
 
-void checkRestart(int decode) { // updates restart the cleaning program after either stopped by IR, returned to original pos or hunted for IR
+void checkRestart() { // updates restart the cleaning program after either stopped by IR, returned to original pos or hunted for IR
   if (ir.decode()) {
     uint32_t value = ir.value;
 
@@ -236,8 +254,21 @@ void loop() {
     }
 
     if (line != 3) {
+      motor1.stop();
+      motor2.stop();
+      delay(50);
+      motor1.run(-speed1);
+      motor2.run(-speed2);
+      delay(200);
+      motor1.stop();
+      motor2.stop();
+      delay(50);
       if (line == 2) turn(1); // turn left if right sensor sees black
       else turn(0); // turn right if left or both sensors see black
+      // delay(50);
+      // motor1.run(-speed1);
+      // motor2.run(-speed2);
+      // delay(200);
     }
 
     checkStop(decode);
@@ -246,11 +277,18 @@ void loop() {
       while (stop == 1) { // wait for restart
         motor1.stop();
         motor2.stop();
-        checkRestart(decode);
+        checkRestart();
+        checkModeLoop();
+        if (manual) break;
       }
     }
 
-    if (ultra < ultraThresh) turn(0); // turn if see object
+    if (ultra < ultraThresh) {
+      motor1.stop();
+      motor2.stop();
+      delay(50);
+      turn(0); // turn if see object
+    }
 
     motor1.run(speed1);
     motor2.run(speed2);
@@ -313,7 +351,11 @@ void loop() {
       motor2.stop();
       delay(delayDur);*/
 
-      while (ret) checkRestart(decode);
+      while (ret) {
+        checkRestart();
+        checkModeLoop();
+        if (manual) break;
+      }
     }
 
     checkHunt(decode);
@@ -336,7 +378,11 @@ void loop() {
       motor2.stop();
       delay(delayDur);
 
-      while (hunt) checkRestart(decode);
+      while (hunt) {
+        checkRestart();
+        checkModeLoop();
+        if (manual) break;
+      }
     }
   }
   else {
@@ -397,6 +443,26 @@ void loop() {
           remoteSpeed1 = 255;
           remoteSpeed2 = -255;
           if (debug) Serial.println("SPEED 4");
+          break;
+        case IR_BUTTON_F:
+          motor1.run(255);
+          motor2.run(-255);
+          delay(1000);
+          motor1.run(-255);
+          motor2.run(255);
+          delay(1000);
+          motor1.run(255);
+          motor2.run(-255);
+          delay(1000);
+          motor1.run(255);
+          motor2.run(255);
+          delay(1000);
+          motor1.run(-255);
+          motor2.run(-255);
+          delay(1000);
+          motor1.stop();
+          motor2.stop();
+          if (debug) Serial.println("FUN");
           break;
       }
     }
